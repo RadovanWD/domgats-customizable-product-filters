@@ -1,47 +1,124 @@
 (function ($) {
-	function updateAcfRepeaterTitle($selectElement) {
-		// Get the text of the selected option (e.g., "Color")
-		const selectedText = $selectElement.find("option:selected").text();
+	"use strict";
 
-		// Find the title element for this specific repeater item
-		const $titleElement = $selectElement.closest(".elementor-repeater-row").find(".elementor-repeater-row-item-title");
+	/**
+	 * Initializes all the handlers for the query repeater controls.
+	 * This function is designed to be called once the query section panel is activated.
+	 *
+	 * @param {jQuery} $panel The jQuery object for the widget's editor panel.
+	 */
+	var initializeQueryRepeaterHandlers = function ($panel) {
+		var $repeater = $panel.find(".elementor-control-query_repeater");
 
-		// If a valid option is selected, update the title. Otherwise, use a default.
-		if (selectedText && $selectElement.val()) {
-			$titleElement.text(selectedText);
-		} else {
-			$titleElement.text("ACF Filter"); // Default text
+		if (!$repeater.length) {
+			return;
 		}
-	}
 
-	function onPanelOpen($panel) {
-		// Set initial titles when the editor panel is first opened
-		$panel.find('select[data-setting="acf_meta_key"]').each(function () {
-			updateAcfRepeaterTitle($(this));
-		});
+		/**
+		 * Fetches ACF field choices via AJAX and populates the value select dropdown.
+		 *
+		 * @param {jQuery} $acfSelect The jQuery object for the ACF field select dropdown.
+		 */
+		var fetchAndPopulateAcfValues = function ($acfSelect) {
+			var $repeaterRow = $acfSelect.closest(".elementor-repeater-row-controls");
+			var $valueSelect = $repeaterRow.find('select[data-setting="acf_meta_value_choice"]');
+			var selectedValue = $acfSelect.val();
 
-		// Add a delegated event listener for when the select is changed
-		$panel.on("change", 'select[data-setting="acf_meta_key"]', function () {
-			updateAcfRepeaterTitle($(this));
-		});
+			if (!selectedValue) {
+				$valueSelect.empty().prop("disabled", true);
+				return;
+			}
 
-		// Also handle when a new repeater item is added
-		$panel.on("repeater:add", function () {
-			setTimeout(function () {
-				$panel.find('select[data-setting="acf_meta_key"]').each(function () {
-					if (
-						$(this).closest(".elementor-repeater-row").find(".elementor-repeater-row-item-title").text() !== $(this).find("option:selected").text()
-					) {
-						updateAcfRepeaterTitle($(this));
+			$valueSelect
+				.prop("disabled", true)
+				.empty()
+				.append($("<option>", { text: "Loading..." }));
+
+			$.ajax({
+				url: dgcf_editor_data.ajax_url,
+				type: "POST",
+				data: {
+					action: "dgcf_get_acf_choices",
+					nonce: dgcf_editor_data.nonce,
+					field_key: selectedValue,
+				},
+				success: function (response) {
+					$valueSelect.empty().prop("disabled", false);
+					if (response.success && response.data) {
+						$valueSelect.append($("<option>", { value: "", text: "Select a value" }));
+						$.each(response.data, function (value, label) {
+							$valueSelect.append($("<option>", { value: value, text: label }));
+						});
+					} else {
+						$valueSelect.append($("<option>", { text: "No values found", value: "" })).prop("disabled", true);
 					}
-				});
-			}, 100);
-		});
-	}
+				},
+				error: function () {
+					$valueSelect
+						.empty()
+						.append($("<option>", { text: "Error fetching values", value: "" }))
+						.prop("disabled", true);
+				},
+			});
+		};
 
-	$(window).on("elementor:init", function () {
-		elementor.hooks.addAction("panel/open_editor/widget/dgcpf_filtered_loop", function (panel, model, view) {
-			onPanelOpen(panel.$el);
+		/**
+		 * Updates the repeater item's title based on the current selections.
+		 * This function now directly targets the title button.
+		 *
+		 * @param {jQuery} $changedElement The jQuery object of the control that was changed.
+		 */
+		var updateRepeaterTitle = function ($changedElement) {
+			var $repeaterRow = $changedElement.closest(".elementor-repeater-fields");
+			var $titleButton = $repeaterRow.find(".elementor-repeater-row-item-title");
+			var $controls = $repeaterRow.find(".elementor-repeater-row-controls");
+
+			var queryType = $controls.find('select[data-setting="query_type"]').val();
+			var newTitle = "New Query";
+
+			if (queryType === "acf") {
+				var $acfSelect = $controls.find('select[data-setting="acf_meta_key"]');
+				if ($acfSelect.val()) {
+					newTitle = $acfSelect
+						.find("option:selected")
+						.text()
+						.replace(/\s\(.*\)/, "")
+						.trim();
+				}
+			} else if (queryType === "taxonomy") {
+				var $taxSelect = $controls.find('select[data-setting="taxonomy"]');
+				if ($taxSelect.val()) {
+					newTitle = $taxSelect.find("option:selected").text().trim();
+				}
+			}
+
+			$titleButton.text(newTitle);
+		};
+
+		// --- Event Delegation ---
+		$repeater.on("change", 'select[data-setting="acf_meta_key"]', function (event) {
+			var $select = $(event.currentTarget);
+			updateRepeaterTitle($select);
+			fetchAndPopulateAcfValues($select);
+		});
+
+		$repeater.on("change", 'select[data-setting="taxonomy"], select[data-setting="query_type"]', function (event) {
+			updateRepeaterTitle($(event.currentTarget));
+		});
+
+		// Trigger for existing items when the panel opens
+		$repeater.find('select[data-setting="acf_meta_key"], select[data-setting="taxonomy"]').each(function () {
+			updateRepeaterTitle($(this));
+		});
+	};
+
+	// --- Elementor Editor Hooks ---
+	$(window).on("elementor/frontend/init", function () {
+		// Hook for when the query section is activated
+		elementor.channels.editor.on("editor:widget:dgcpf_filtered_loop:section_query:activated", function (panel) {
+			console.log("Query section activated for dgcpf_filtered_loop.", panel);
+			var $widgetPanel = panel.$el.closest(".elementor-panel-page");
+			initializeQueryRepeaterHandlers($widgetPanel);
 		});
 	});
 })(jQuery);
